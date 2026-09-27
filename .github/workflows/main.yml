@@ -49,9 +49,8 @@ jobs:
 
           unzip -q akharin_nameh_shiraz_final_v1.zip -d project
 
-          echo "Checking project files..."
-
           test -f project/settings.gradle
+          test -f project/build.gradle
           test -f project/app/build.gradle
 
           echo "Android project extracted successfully."
@@ -67,28 +66,29 @@ jobs:
 
           chmod 600 "$RUNNER_TEMP/release.jks"
 
+          test -s "$RUNNER_TEMP/release.jks"
+
           echo "Keystore decoded successfully."
 
       - name: Build signed release APK
         working-directory: project
         env:
-          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          test -n "$KEYSTORE_FILE"
           test -n "$KEYSTORE_PASSWORD"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
 
+          echo "Building release APK..."
+
           gradle \
             --no-daemon \
             --stacktrace \
-            :app:assembleRelease \
-            -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
-            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+            :app:assembleRelease
 
       - name: Check generated APK
         run: |
