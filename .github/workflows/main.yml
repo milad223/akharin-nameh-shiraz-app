@@ -43,14 +43,12 @@ jobs:
 
           echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
 
-          /tmp/gradle-8.9/bin/gradle --version
-
       - name: Extract Android project
         run: |
           echo "Checking project ZIP..."
 
           test -f akharin_nameh_shiraz_final_v1.zip || {
-            echo "::error::akharin_nameh_shiraz_final_v1.zip was not found."
+            echo "::error::Project ZIP not found."
             exit 1
           }
 
@@ -59,22 +57,11 @@ jobs:
 
           unzip -q akharin_nameh_shiraz_final_v1.zip -d project
 
-          test -f project/settings.gradle || {
-            echo "::error::settings.gradle was not found."
-            exit 1
-          }
+          test -f project/settings.gradle
+          test -f project/build.gradle
+          test -f project/app/build.gradle
 
-          test -f project/build.gradle || {
-            echo "::error::build.gradle was not found."
-            exit 1
-          }
-
-          test -f project/app/build.gradle || {
-            echo "::error::app/build.gradle was not found."
-            exit 1
-          }
-
-          echo "Android project extracted successfully."
+          echo "Project extracted successfully."
 
       - name: Fix signing configuration
         run: |
@@ -94,7 +81,7 @@ jobs:
           if build_types == -1:
               raise SystemExit("buildTypes block not found")
 
-          signing = """signingConfigs {
+          signing_block = """signingConfigs {
               release {
                   def ks = System.getenv('KEYSTORE_FILE')
                   def sp = System.getenv('KEYSTORE_PASSWORD')
@@ -112,25 +99,19 @@ jobs:
 
           """
 
-          text = text[:start] + signing + text[build_types:]
+          text = text[:start] + signing_block + text[build_types:]
 
           path.write_text(text, encoding="utf-8")
 
-          print("Signing configuration updated.")
+          print("Signing configuration fixed.")
           PY
-
-          echo "----- app/build.gradle -----"
-          cat project/app/build.gradle
-          echo "----------------------------"
 
       - name: Decode release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "Decoding release keystore..."
-
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::KEYSTORE_BASE64 secret is empty."
+            echo "::error::KEYSTORE_BASE64 is empty."
             exit 1
           fi
 
@@ -140,103 +121,11 @@ jobs:
           chmod 600 "$RUNNER_TEMP/release.jks"
 
           if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
-            echo "::error::Decoded keystore is empty."
+            echo "::error::Keystore decoding failed."
             exit 1
           fi
 
           echo "Keystore decoded successfully."
-          echo "Keystore size: $(wc -c < "$RUNNER_TEMP/release.jks") bytes"
-
-      - name: Validate release keystore
-        env:
-          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        run: |
-          echo "===== KEYSTORE VALIDATION ====="
-
-          if [ ! -f "$KEYSTORE_FILE" ]; then
-            echo "::error::Keystore file does not exist."
-            exit 1
-          fi
-
-          if [ -z "$KEYSTORE_PASSWORD" ]; then
-            echo "::error::KEYSTORE_PASSWORD secret is empty."
-            exit 1
-          fi
-
-          if [ -z "$KEY_ALIAS" ]; then
-            echo "::error::KEY_ALIAS secret is empty."
-            exit 1
-          fi
-
-          echo "Keystore file found."
-          echo "Configured alias: $KEY_ALIAS"
-
-          echo "Testing keystore password..."
-
-          set +e
-
-          KEYTOOL_OUTPUT="$(
-            keytool \
-              -list \
-              -keystore "$KEYSTORE_FILE" \
-              -storepass "$KEYSTORE_PASSWORD" \
-              2>&1
-          )"
-
-          KEYTOOL_STATUS=$?
-
-          set -e
-
-          if [ "$KEYTOOL_STATUS" -ne 0 ]; then
-            echo "::error::Cannot open the keystore."
-            echo "The keystore password may be incorrect, or the keystore file may be invalid."
-            echo "----- keytool output -----"
-            echo "$KEYTOOL_OUTPUT"
-            echo "--------------------------"
-            exit 1
-          fi
-
-          echo "Keystore password accepted."
-
-          echo "Checking alias..."
-
-          set +e
-
-          ALIAS_OUTPUT="$(
-            keytool \
-              -list \
-              -keystore "$KEYSTORE_FILE" \
-              -storepass "$KEYSTORE_PASSWORD" \
-              -alias "$KEY_ALIAS" \
-              2>&1
-          )"
-
-          ALIAS_STATUS=$?
-
-          set -e
-
-          if [ "$ALIAS_STATUS" -ne 0 ]; then
-            echo "::error::The configured alias was not found in the keystore."
-            echo "Configured alias: $KEY_ALIAS"
-
-            echo "----- Available aliases -----"
-
-            keytool \
-              -list \
-              -keystore "$KEYSTORE_FILE" \
-              -storepass "$KEYSTORE_PASSWORD" \
-              2>&1 || true
-
-            echo "-----------------------------"
-            echo "$ALIAS_OUTPUT"
-
-            exit 1
-          fi
-
-          echo "Alias found."
-          echo "===== KEYSTORE VALIDATION PASSED ====="
 
       - name: Build signed release APK
         working-directory: project
@@ -246,7 +135,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "===== BUILDING RELEASE APK ====="
+          echo "Starting release build..."
 
           if [ -z "$KEYSTORE_PASSWORD" ]; then
             echo "::error::KEYSTORE_PASSWORD is empty."
@@ -263,16 +152,16 @@ jobs:
             exit 1
           fi
 
+          echo "KEY_ALIAS is configured."
+
           gradle \
             --no-daemon \
             --stacktrace \
             :app:assembleRelease
 
-          echo "===== BUILD FINISHED ====="
-
       - name: Check generated APK
         run: |
-          echo "Searching for generated APK..."
+          echo "Searching for APK..."
 
           APK=$(find \
             project/app/build/outputs/apk/release \
@@ -281,11 +170,11 @@ jobs:
             -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "::error::No release APK was generated."
+            echo "::error::No APK was generated."
             exit 1
           fi
 
-          echo "APK found:"
+          echo "APK generated successfully:"
           echo "$APK"
 
           ls -lh "$APK"
