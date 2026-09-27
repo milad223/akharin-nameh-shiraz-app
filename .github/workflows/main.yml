@@ -14,15 +14,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # 1. دریافت پروژه
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. نصب Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: "17"
           distribution: "temurin"
 
+      # 3. نصب Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -32,76 +36,150 @@ jobs:
           sdkmanager "platforms;android-35"
           sdkmanager "build-tools;35.0.0"
 
+      # 4. نصب Gradle
       - name: Install Gradle 8.9
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip -O /tmp/gradle.zip
+          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip \
+            -O /tmp/gradle.zip
+
           unzip -q /tmp/gradle.zip -d /tmp
+
           echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
 
+      # 5. خارج کردن پروژه از ZIP
       - name: Extract Android project
         run: |
           rm -rf project
           mkdir project
+
+          test -f akharin_nameh_shiraz_final_v1.zip
+
           unzip -q akharin_nameh_shiraz_final_v1.zip -d project
+
           test -f project/settings.gradle
           test -f project/build.gradle
           test -f project/app/build.gradle
 
+          echo "Android project extracted successfully."
+
+      # 6. اصلاح تنظیمات امضای Release
       - name: Fix signing configuration
-        working-directory: project
         run: |
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
 
-          p = Path("app/build.gradle")
-          s = p.read_text()
+          path = Path("project/app/build.gradle")
+          text = path.read_text(encoding="utf-8")
 
-          s = s.replace(
-              "keyAlias 'akharin-nameh-shiraz'",
-              "keyAlias System.getenv('KEY_ALIAS')"
-          )
+          start = text.find("signingConfigs {")
+          build_types = text.find("buildTypes {")
 
-          if "def ka = System.getenv('KEY_ALIAS')" not in s:
-              s = s.replace(
-                  "def kp = System.getenv('KEY_PASSWORD')",
-                  "def ka = System.getenv('KEY_ALIAS')\n            def kp = System.getenv('KEY_PASSWORD')"
-              )
+          if start == -1:
+              raise SystemExit("signingConfigs block not found")
 
-          s = s.replace(
-              "if (ks != null && sp != null && kp != null)",
-              "if (ks != null && sp != null && ka != null && kp != null)"
-          )
+          if build_types == -1:
+              raise SystemExit("buildTypes block not found")
 
-          p.write_text(s)
+          signing_block = """signingConfigs {
+              release {
+                  def ks = System.getenv('KEYSTORE_FILE')
+                  def sp = System.getenv('KEYSTORE_PASSWORD')
+                  def ka = System.getenv('KEY_ALIAS')
+                  def kp = System.getenv('KEY_PASSWORD')
+
+                  if (ks && sp && ka && kp) {
+                      storeFile file(ks)
+                      storePassword sp
+                      keyAlias ka
+                      keyPassword kp
+                  }
+              }
+          }
+
+          """
+
+          text = text[:start] + signing_block + text[build_types:]
+
+          path.write_text(text, encoding="utf-8")
+
+          print("Signing configuration fixed successfully.")
           PY
 
+          echo "Updated app/build.gradle:"
+          sed -n '1,160p' project/app/build.gradle
+
+      # 7. Decode کردن Keystore
       - name: Decode release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          test -n "$KEYSTORE_BASE64"
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
-          chmod 600 "$RUNNER_TEMP/release.jks"
-          test -s "$RUNNER_TEMP/release.jks"
+          test -n "$KEYSTORE_BASE64" || {
+            echo "::error::KEYSTORE_BASE64 is empty."
+            exit 1
+          }
 
+          echo "$KEYSTORE_BASE64" | base64 --decode \
+            > "$RUNNER_TEMP/release.jks"
+
+          chmod 600 "$RUNNER_TEMP/release.jks"
+
+          test -s "$RUNNER_TEMP/release.jks" || {
+            echo "::error::Keystore file is empty."
+            exit 1
+          }
+
+          echo "Keystore decoded successfully."
+
+      # 8. بررسی Keystore
       - name: Validate release keystore
         env:
           KEYSTORE_FILE: ${{ runner.temp }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          test -n "$KEYSTORE_PASSWORD"
-          test -n "$KEY_ALIAS"
+          echo "Checking release keystore..."
 
-          keytool -list \
-            -keystore "$KEYSTORE_FILE" \
-            -storepass "$KEYSTORE_PASSWORD"
+          test -s "$KEYSTORE_FILE" || {
+            echo "::error::Keystore file is missing or empty."
+            exit 1
+          }
 
-          keytool -list \
+          test -n "$KEYSTORE_PASSWORD" || {
+            echo "::error::KEYSTORE_PASSWORD is empty."
+            exit 1
+          }
+
+          test -n "$KEY_ALIAS" || {
+            echo "::error::KEY_ALIAS is empty."
+            exit 1
+          }
+
+          echo "Checking keystore password..."
+
+          if ! keytool -list \
             -keystore "$KEYSTORE_FILE" \
             -storepass "$KEYSTORE_PASSWORD" \
-            -alias "$KEY_ALIAS"
+            >/dev/null 2>&1; then
 
+            echo "::error::KEYSTORE_PASSWORD is incorrect or the keystore is invalid."
+            exit 1
+          fi
+
+          echo "Checking key alias..."
+
+          if ! keytool -list \
+            -keystore "$KEYSTORE_FILE" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            >/dev/null 2>&1; then
+
+            echo "::error::KEY_ALIAS does not exist in the keystore."
+            exit 1
+          fi
+
+          echo "Release keystore validation passed."
+
+      # 9. ساخت APK امضاشده
       - name: Build signed release APK
         working-directory: project
         env:
@@ -110,30 +188,36 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          test -n "$KEYSTORE_FILE"
           test -n "$KEYSTORE_PASSWORD"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
 
-          gradle --no-daemon --stacktrace :app:assembleRelease
+          echo "Building signed release APK..."
 
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            :app:assembleRelease
+
+      # 10. بررسی APK
       - name: Check generated APK
         run: |
-          find project/app/build/outputs/apk/release -type f -name "*.apk" -print
-          test -n "$(find project/app/build/outputs/apk/release -type f -name "*.apk" -print -quit)"
+          echo "Generated APK files:"
 
-      - name: Upload signed APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: AkharinNamehShiraz-signed-release
-          path: project/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
+          find project/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            -print
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="v1.0.${{ github.run_number }}"
-          gh release create "$TAG" \
-            project/app/build/outputs/apk/release/*.apk \
-            --title "آخرین نامه از شیراز $TAG" \
-            --notes "نسخه امضاشده برنامه آخرین نامه از شیراز"
+          APK=$(find project/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            -print -quit)
+
+          test -n "$APK" || {
+            echo "::error::No release APK was generated."
+            exit 1
+          }
+
+          echo "APK generated successfully
