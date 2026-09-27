@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -59,9 +62,20 @@ jobs:
         run: |
           find "${{ env.PROJECT_DIR }}" -type f -name "*.apk" -print
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AkharinNamehShiraz-APK
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(find "${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug" -type f -name "*.apk" | head -1)
+          TAG="v1.0.${{ github.run_number }}"
+
+          gh release create "$TAG" "$APK" \
+            --title "آخرین نامه از شیراز $TAG" \
+            --generate-notes
