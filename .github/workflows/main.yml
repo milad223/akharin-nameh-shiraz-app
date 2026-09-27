@@ -1,4 +1,4 @@
-name: Build APK
+name: Build Final Signed APK
 
 on:
   workflow_dispatch:
@@ -30,52 +30,55 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Extract project ZIP
-        run: |
-          rm -rf project
-          mkdir project
-          unzip -q akharin_nameh_shiraz_final_v1.zip -d project
-          echo "Project extracted"
-          find project -maxdepth 3 -type f | head -50
-
-      - name: Find project root
-        run: |
-          if [ -f "project/settings.gradle" ] || [ -f "project/settings.gradle.kts" ]; then
-            echo "PROJECT_DIR=project" >> "$GITHUB_ENV"
-          else
-            ROOT=$(find project -name settings.gradle -o -name settings.gradle.kts | head -1 | xargs dirname)
-            echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
-          fi
-
       - name: Install Gradle 8.9
         run: |
           wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip -O /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /tmp
           echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
 
-      - name: Build APK
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Extract final project ZIP
         run: |
-          gradle --no-daemon --stacktrace assembleDebug
+          rm -rf project
+          mkdir project
+          unzip -q akharin_nameh_shiraz_final_v4.zip -d project
+          test -f project/settings.gradle
+          test -f project/app/build.gradle
+          echo "Final project extracted successfully"
 
-      - name: Find APK
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          find "${{ env.PROJECT_DIR }}" -type f -name "*.apk" -print
+          test -n "$KEYSTORE_BASE64"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          chmod 600 "$RUNNER_TEMP/release.jks"
 
-      - name: Upload APK Artifact
+      - name: Build signed release APK
+        working-directory: project
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Upload signed APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AkharinNamehShiraz-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          name: AkharinNamehShiraz-v4.0.0-signed
+          path: project/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          APK=$(find "${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug" -type f -name "*.apk" | head -1)
-          TAG="v1.0.${{ github.run_number }}"
-
-          gh release create "$TAG" "$APK" \
+          TAG="v4.0.${{ github.run_number }}"
+          gh release create "$TAG" \
+            project/app/build/outputs/apk/release/*.apk \
             --title "آخرین نامه از شیراز $TAG" \
-            --generate-notes
+            --notes "نسخه نهایی امضاشده برنامه آخرین نامه از شیراز — نویسنده: میلاد شجیراتی"
