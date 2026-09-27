@@ -100,7 +100,9 @@ jobs:
             -print
 
           test -n "$(find project/app/build/outputs/apk/release \
-            -type f -name "*.apk" -print -quit)"
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
