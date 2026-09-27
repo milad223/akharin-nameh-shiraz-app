@@ -55,6 +55,39 @@ jobs:
 
           echo "Android project extracted successfully."
 
+      - name: Fix release signing configuration
+        working-directory: project
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("app/build.gradle")
+          s = p.read_text()
+
+          s = s.replace(
+              "def kp = System.getenv('KEY_PASSWORD')",
+              """def ka = System.getenv('KEY_ALIAS')
+            def kp = System.getenv('KEY_PASSWORD')"""
+          )
+
+          s = s.replace(
+              "if (ks != null && sp != null && kp != null)",
+              "if (ks != null && sp != null && ka != null && kp != null)"
+          )
+
+          s = s.replace(
+              "keyAlias 'akharin-nameh-shiraz'",
+              "keyAlias ka"
+          )
+
+          p.write_text(s)
+
+          print("Release signing configuration patched.")
+          PY
+
+          echo "Checking signing configuration:"
+          grep -A15 -B2 "signingConfigs" app/build.gradle
+
       - name: Decode release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -68,7 +101,26 @@ jobs:
 
           test -s "$RUNNER_TEMP/release.jks"
 
-          echo "Keystore decoded successfully."
+          echo "Keystore file created."
+
+      - name: Validate release keystore
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          test -n "$KEYSTORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+
+          echo "Checking keystore..."
+
+          keytool -list \
+            -keystore "$KEYSTORE_FILE" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            >/dev/null
+
+          echo "Keystore and alias are valid."
 
       - name: Build signed release APK
         working-directory: project
@@ -83,7 +135,7 @@ jobs:
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
 
-          echo "Building release APK..."
+          echo "Building signed release APK..."
 
           gradle \
             --no-daemon \
@@ -92,7 +144,7 @@ jobs:
 
       - name: Check generated APK
         run: |
-          echo "Generated APK files:"
+          echo "Generated APK:"
 
           find project/app/build/outputs/apk/release \
             -type f \
