@@ -93,6 +93,7 @@ jobs:
       - name: Check generated APK
         run: |
           echo "Generated APK files:"
+
           find project/app/build/outputs/apk/release \
             -type f \
             -name "*.apk" \
@@ -105,4 +106,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AkharinNamehShiraz-signed-release
-         
+          path: project/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+
+          gh release create "$TAG" \
+            project/app/build/outputs/apk/release/*.apk \
+            --title "آخرین نامه از شیراز $TAG" \
+            --notes "نسخه امضاشده برنامه آخرین نامه از شیراز — نویسنده: میلاد شجیراتی"
